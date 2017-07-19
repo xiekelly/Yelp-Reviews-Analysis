@@ -1,0 +1,250 @@
+---
+title: 'Lab 4: Yelp Reviews'
+author: "Kelly Xie"
+date: "Apr 11, 2017"
+output:
+  html_document: default
+  word_document:
+    toc: no
+---
+
+----------------------
+1. Summary Statistics
+----------------------
+
+```{r Histogram}
+# a histogram of all restaurant ratings given by users
+
+library("ggplot2")
+
+reviews = read.csv("/data/yelpreviewsdata.csv")
+reviews = unique(reviews) # removes duplicate reviews
+
+gg = ggplot(data=reviews, aes(reviews$stars)) +
+  geom_histogram(binwidth = 1, aes(fill = ..count..)) +
+  xlab("Restaurant Rating") +
+  ylab("Frequency of Rating") + 
+  ggtitle("Frequency of Restaurant Ratings on Yelp")
+
+gg
+```
+
+```{r Reviews by Restaurant}
+# calculates the number of reviews the average restaurant in this sample received
+
+library("dplyr")
+
+byrestaurant = reviews %>% 
+  group_by(business_id) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+summarise(byrestaurant, "Average Number of Reviews by Restaurant" = mean(count))
+```
+
+```{r Reviews by User}
+# calculates the number of reviews the average user has contributed in this sample
+
+byuser = reviews %>%
+  group_by(user_id) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+summarise(byuser, "Average Number of Reviews by User" = mean(count))
+```
+
+```{r GoodForLunch Reviews}
+# on average, do GoodForLunch restaurants receive a greater number of reviews
+
+goodforlunch = reviews %>% 
+  subset(GoodforLunch == "True") %>% 
+  group_by(business_id) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+summarise(goodforlunch, "Average Number of Reviews (GoodForLunch)" = mean(count))
+
+notgood = reviews %>% 
+  subset(GoodforLunch == "False") %>% 
+  group_by(business_id) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+summarise(notgood, "Average Number of Reviews (NOT GoodForLunch)" = mean(count))
+```
+On average, restaurants marked Good For Lunch receive 0.4 (15.5%) fewer reviews than restaurants that are not.
+
+```{r GoodForLunch Ratings}
+# on average, do GoodForLunch restaurants receive a higher number of stars
+
+GFL = reviews %>% 
+  subset(GoodforLunch == "True") %>% 
+  group_by(business_id) %>% 
+  summarise(rating = mean(stars)) %>% 
+  arrange(desc(rating))
+summarise(GFL, "Average Rating (GoodForLunch)" = mean(rating))
+
+notGFL = reviews %>% 
+  subset(GoodforLunch == "False") %>% 
+  group_by(business_id) %>% 
+  summarise(rating = mean(stars)) %>% 
+  arrange(desc(rating))
+summarise(notGFL, "Average Rating (NOT GoodForLunch)" = mean(rating))
+```
+On average, restaurants marked Good For Lunch on Yelp are rated 0.012 (0.33%) higher than restaurants that are not.
+
+
+-----------------------------
+2. Exploratory Text Analysis
+-----------------------------
+
+```{r Document-Term Matrix}
+# converts reviews to text corpus
+
+library("tm")
+corp.original = VCorpus(VectorSource(reviews$text))
+
+# clean  and reprocesses the text
+corp = tm_map(corp.original, removePunctuation)
+corp = tm_map(corp, removeNumbers)
+corp = tm_map(corp, content_transformer(removeWords), stopwords("SMART"),lazy=TRUE)
+corp = tm_map(corp, content_transformer(tolower),lazy=TRUE)
+corp = tm_map(corp, content_transformer(stemDocument),lazy=TRUE)
+corp = tm_map(corp, stripWhitespace)
+
+# generates a document-term matrix
+dtm = DocumentTermMatrix(corp)
+m = as.matrix(dtm)
+```
+
+```{r Most Frequent Terms}
+# grabs fifteen most frequently appearing words among all reviews
+word.freq = colSums(m)
+word.freq = sort(word.freq, decreasing=TRUE)
+as.data.frame(word.freq[1:15])
+```
+
+```{r Frequency Word Cloud}
+# generates a word cloud using the document-term matrix (max 100 words)
+# size of the word correlates to its frequency in the review
+
+library("wordcloud")
+wordcloud(names(word.freq), word.freq, scale = c(4, .5), 
+          max.words = 100, colors = brewer.pal(6, "Dark2"), random.order = FALSE)
+```
+
+
+---------------------------------
+3. Text Analytics and Prediction
+---------------------------------
+
+```{r Unique Terms}
+# gets number of unique terms in document-term matrix
+dim(dtm)
+```
+There are 34255 unique terms in the document-term matrix.
+
+```{r Most Predictive Terms}
+# narrows the list down to the 200 words with the most predictive power
+
+dtms = removeSparseTerms(dtm, .990) #remove sparse terms with .990 threshold
+dtm_matrix = as.matrix(dtms)
+
+# calculates correlation matrix between document-term matrix and goodforlunch
+corr = cor(as.numeric(as.logical(reviews$GoodforLunch)), dtm_matrix)
+absCorr = abs(corr) #get absolute value of correlations
+
+# keeps 200 terms with highest correlation magnitudes (both pos and neg)
+top200 = order(absCorr, decreasing=TRUE)[1:200]
+top200words = colnames(absCorr)[top200]
+
+# creates new document-term matrix with these terms
+newDTM.df = as.data.frame(cbind(GoodForLunch = as.numeric(as.logical(reviews$GoodforLunch)), 
+                             dtm_matrix[,top200words]))
+newDTM.m = as.matrix(newDTM.df)
+dim(newDTM.m)
+```
+There are 201 unique terms in the new document-term matrix.
+
+```{r Correlation Word Cloud}
+# generates a wordcloud where the size corresponds to the correlation strength
+# of the top 20 positive and negative words
+
+# grabs top 20 positive words
+top20pos = order(corr, decreasing=TRUE)[1:20]
+top20poswords = colnames(corr)[top20pos]
+pos.df = as.data.frame(cbind(term = top20poswords, corr = corr[top20pos]))
+
+# grabs top 20 negative words
+top20neg = order(corr)[1:20]
+top20negwords = colnames(corr)[top20neg]
+neg.df = as.data.frame(cbind(term = top20negwords, corr = corr[top20neg]))
+
+# forms wordcloud
+wordcloud(words = c(as.character(pos.df$term), as.character(neg.df$term)), 
+          freq = c(as.numeric(as.character(pos.df$corr)), abs(as.numeric(as.character(neg.df$corr)))),
+          scale = c(2.5, .5), 
+          colors = c(rep("green",20), rep("blue",20)), 
+          ordered.colors = TRUE, random.order = FALSE, random.color = FALSE)
+```
+Legend: Positive term = green; Negative term = blue
+
+```{r Partitioning Data}
+# partitions the matrix into training and test rows so you can use the test data to evaluate your model performance
+traindata = newDTM.df[1:(.8*nrow(newDTM.df)),]
+testdata = newDTM.df[-(1:(.8*nrow(newDTM.df))),]
+```
+
+```{r Logistic Regression Model}
+# fits a logistic regression model to the selected variables in the training data
+model = glm(GoodForLunch ~ ., data = traindata, family = binomial)
+model
+
+# Notes:
+# A positive coefficient positively predicts that a restaurant is good for lunch. 
+# A negative coefficient suggests a restaurant would not be good for lunch.
+
+# uses the coef command to access top positive and negative words from the model
+coef = coef(model)[-1]
+pos.terms = coef[coef>0]
+top.pos = sort(pos.terms,decreasing=T)[1:15]
+top.pos # Top 15 Positive Words
+
+neg.terms = coef[coef<0]
+top.neg = sort(neg.terms)[1:15]
+top.neg # Top 15 Negative Words
+```
+
+```{r Model Word Cloud}
+# produces a word cloud that separates the top 15 positive words and top 15 negative words
+
+poswords = tibble::rownames_to_column(as.data.frame(top.pos), var="term")
+negwords = tibble::rownames_to_column(as.data.frame(top.neg), var="term")
+
+# forms wordcloud
+wordcloud(words = c(poswords$term, negwords$term), 
+          freq = c(poswords$top.pos, abs(negwords$top.neg)), 
+          scale = c(4.5, .5), 
+          colors = c(rep("red",15), rep("purple",15)), 
+          ordered.colors = TRUE, random.order = FALSE, random.color = FALSE)
+```
+Legend: Positive words = red; Negative words = purple
+
+```{r Classification Accuracy in Training Data}
+# chooses a probability threshold to maximize accuracy and classify the restaurants in your training data as 1 or 0 according to whether they are GoodForLunch. 
+traindata$predict_val = predict(model, type="response")
+traindata$gfl_predicted = traindata$predict_val > 0.5
+
+# How well does this model perform on the training data in terms of classification accuracy (i.e. the percentage of GoodForLunch values that you get correct)?
+accuracy = sum(traindata$gfl_predicted == traindata$GoodForLunch) / nrow(traindata)
+accuracy
+```
+With a probability threshold of 0.5, this model has a 68.43% classification accuracy for predicting GoodForLunch in the training data.
+
+```{r Predicting Values in Test Data}
+# predicts values for GoodforLunch in your test data
+testdata$predict_val = predict(model, newdata = testdata, type = "response")
+testdata$gfl_predicted = testdata$predict_val > 0.5
+
+# How well does the model perform in terms of classification accuracy (i.e. the percentage of GoodForLunch values that you get correct)?
+accuracy.test = sum(testdata$gfl_predicted == testdata$GoodForLunch) / nrow(testdata)
+accuracy.test
+```
+With a probability threshold of 0.5, this model has a 67.83% classification accuracy for predicting GoodForLunch in the test data.
+
